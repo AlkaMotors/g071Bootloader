@@ -55,43 +55,6 @@ void save_flash_nolib(uint8_t *data, int length, uint32_t add){
 	 FLASH->SR |= 1 << 7;
 
 
-	 //		 if(add == APP_START){
-//				while ((FLASH->SR & FLASH_SR_BSY1) != 0) {
-//				/*  add time-out*/
-//				}
-//for(int i = 2; i < 30; i++){
-//		FLASH->CR |= FLASH_CR_PER;
-//		FLASH->CR |= i << 3;
-//		FLASH->CR |= FLASH_CR_STRT;
-//		while ((FLASH->SR & FLASH_SR_BSY1) != 0){
-//		/*  add time-out */
-//		}
-//		FLASH->CR &= ~FLASH_CR_PER;
-//
-//		 }
-//		 }
-
-
-//		 if(add == EEPROM_START){
-//				while ((FLASH->SR & FLASH_SR_BSY1) != 0) {
-//				/*  add time-out*/
-//				}
-//
-//		FLASH->CR |= FLASH_CR_PER;
-//		FLASH->CR |= 63 << 3;
-//		FLASH->CR |= FLASH_CR_STRT;
-//		while ((FLASH->SR & FLASH_SR_BSY1) != 0){
-//		/*  add time-out */
-//		}
-//		FLASH->CR &= ~FLASH_CR_PER;
-//
-//
-//		 }
-
-
-
-
-
 	 volatile uint32_t write_cnt=0, index=0;
 	 while(index < data_length)
 			  {
