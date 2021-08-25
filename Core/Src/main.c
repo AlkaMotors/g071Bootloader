@@ -6,11 +6,19 @@
 typedef void (*pFunction)(void);
 
 #define USE_PB4
+#define BOOTLOADER_VERSION 5
+//#define ALLOW_FOUR_WAY_COMMANDS
+#define SIXTY_FOUR_KB_MEMORY
+
 #define APPLICATION_ADDRESS     (uint32_t)0x08001000               // 4k
 
+#ifdef SIXTY_FOUR_KB_MEMORY
+#define EEPROM_START_ADD         (uint32_t)0x0800F800
+#define FLASH_END_ADD           (uint32_t)0x0800FFFF
+#else
 #define EEPROM_START_ADD         (uint32_t)0x0801F800
 #define FLASH_END_ADD           (uint32_t)0x0801FFFF
-
+#endif
 
 #define CMD_RUN             0x00
 #define CMD_PROG_FLASH      0x01
@@ -28,13 +36,14 @@ typedef void (*pFunction)(void);
 
 #ifdef USE_PB4
 #define input_pin       LL_GPIO_PIN_4
-#define shift_amount        4
 #define input_port        GPIOB
+#define PIN_NUMBER        4
+#define PORT_LETTER       1
 #endif
 
 
 char flash_error = 0;
-char receviedByte;
+uint8_t receviedByte;
 int receivedCount;
 int count = 0;
 char messagereceived = 0;
@@ -43,7 +52,16 @@ uint16_t address_expected_increment;
 int cmd = 0;
 char eeprom_req = 0;
 int received;
-uint8_t deviceInfo[9] = {0x34,0x37,0x31,0x64,0x2B,0x06,0x06,0x01, 0x30};      // stm32 device info 062b
+uint8_t pin_code = PORT_LETTER << 4 | PIN_NUMBER;
+
+
+
+#ifdef SIXTY_FOUR_KB_MEMORY
+uint8_t deviceInfo[9] = {0x34,0x37,0x31,0x64,0x35,0x06,0x06,0x01, 0x30};  // 64 k identifier 06 35
+#else
+uint8_t deviceInfo[9] = {0x34,0x37,0x31,0x64,0x2B,0x06,0x06,0x01, 0x30};      // stm32 128k device info 06 2b
+#endif
+
 
 //uint8_t deviceInfo[9] = {0x34,0x37,0x31,0x64,0xf3,0x90,0x06,0x01, 0x30};       // silabs device id
 //uint8_t deviceInfo[9] = {0x34,0x37,0x31,0x64,0xe8,0xb2,0x06,0x01, 0x30};     // blheli_s identifier
@@ -51,10 +69,12 @@ uint8_t deviceInfo[9] = {0x34,0x37,0x31,0x64,0x2B,0x06,0x06,0x01, 0x30};      //
 
 size_t str_len;
 char connected = 0;
-uint8_t rxBuffer[258];
-uint8_t payLoadBuffer[256];
-char rxbyte=0;
+uint8_t rxBuffer[300];
+uint8_t payLoadBuffer[300];            // change to 300 from 256 to allow 4 way messages
+uint8_t rxbyte=0;
 uint32_t address;
+uint32_t base_address = 0;
+
 int tick = 0;
 
 typedef union __attribute__ ((packed)) {
@@ -97,11 +117,7 @@ void delayMicroseconds(uint32_t micros){
 }
 
 void jump(){
-
-
 	__disable_irq();
-
-
 	JumpAddress = *(__IO uint32_t*) (APPLICATION_ADDRESS + 4);
 	uint8_t value = *(uint8_t*)(EEPROM_START_ADD);
 #ifdef USE_ADC_INPUT
@@ -113,11 +129,8 @@ void jump(){
 #endif
 //	SCB->VTOR = 0x08001000;
     JumpToApplication = (pFunction) JumpAddress;
-
     __set_MSP(*(__IO uint32_t*) APPLICATION_ADDRESS);
    JumpToApplication();
-
-
 }
 
 
@@ -197,8 +210,160 @@ void sendDeviceInfo(){
 	setTransmit();
 	sendString(deviceInfo,9);
 	setReceive();
-
 }
+
+#ifdef ALLOW_FOUR_WAY_COMMANDS
+uint16_t makeFourWayCRC(uint8_t *crcdata, int length){
+    uint16_t crc  =0;
+    for(int i = 0; i < length; i++) {
+        crc = crc ^ (crcdata[i] << 8);
+        for (int i = 0; i < 8; ++i) {
+            if (crc & 0x8000){
+                crc = (crc << 1) ^ 0x1021;
+            }
+            else{
+                crc = crc << 1;
+            }
+        }
+        crc = crc & 0xffff;
+    }
+    return crc;
+}
+
+
+uint8_t checkFourWayCRC(uint16_t buffer_length){
+    uint16_t fourcrc  =0;
+    fourcrc = makeFourWayCRC((uint8_t*)rxBuffer, buffer_length-2);
+
+	char fourWayCrcHighByte = (fourcrc >> 8) & 0xff;
+    char fourWayCrcLowByte = fourcrc & 0xff;
+
+    if((fourWayCrcHighByte == rxBuffer[buffer_length-2]) &&(fourWayCrcLowByte == rxBuffer[buffer_length-1])) {
+        return(1);
+    }else{
+        return(0);
+    }
+}
+
+
+void parseFourWayMessage(){
+
+	uint8_t fourwayCommand = rxBuffer[1];
+
+	switch(fourwayCommand){
+
+
+
+		case 0x37:             // init flash
+			if(checkFourWayCRC(8) == 1){
+				payLoadBuffer[0] = 0x2e;
+				payLoadBuffer[1] = 0x37;
+				payLoadBuffer[2] = 0x00;
+				payLoadBuffer[3] = 0x00;
+				payLoadBuffer[4] = 0x03;
+				payLoadBuffer[5] = 0x06;
+				payLoadBuffer[6] = 0x2b;
+				payLoadBuffer[7] = 0x64;
+				payLoadBuffer[8] = 0x01;
+				payLoadBuffer[9] = 0x00;
+
+
+				uint16_t fullCrc  = makeFourWayCRC((uint8_t*)payLoadBuffer,10);
+
+				payLoadBuffer[10] = (fullCrc >> 8) & 0xff;
+				payLoadBuffer[11] =  fullCrc & 0xff;
+
+				setTransmit();
+				sendString(payLoadBuffer,12);
+				setReceive();
+			}else{
+				return;
+			}
+
+		break;
+		case 0x3A:             // read memory
+			if(checkFourWayCRC(8) == 1){
+				payLoadBuffer[0] = 0x2e;
+				payLoadBuffer[1] = 0x3A;
+				payLoadBuffer[2] = rxBuffer[2];
+				payLoadBuffer[3] = rxBuffer[3];
+				payLoadBuffer[4] = rxBuffer[5];
+
+
+
+				base_address =  (rxBuffer[2] << 8 | rxBuffer[3]) << 2;
+				address = 0x08000000 + base_address;
+
+				uint16_t out_buffer_size = rxBuffer[5];//
+
+
+				if(out_buffer_size == 0){
+					out_buffer_size = 256;
+				}
+
+				for (int i = 0; i < out_buffer_size ; i ++){
+					payLoadBuffer[i+5] = *(uint8_t*)(address + i);
+				}
+
+				payLoadBuffer[out_buffer_size+6] = 0x00;
+				uint16_t fullCrc  = makeFourWayCRC((uint8_t*)payLoadBuffer,out_buffer_size+6);
+					payLoadBuffer[out_buffer_size+6] = (fullCrc >> 8) & 0xff;
+					payLoadBuffer[out_buffer_size + 7] =  fullCrc & 0xff;
+					setTransmit();
+		            sendString(payLoadBuffer, out_buffer_size+8);
+
+					setReceive();
+
+
+			}else{
+				return;
+			}
+		break;                 // write memory
+		case 0x3B:
+
+			payload_buffer_size = rxBuffer[4];
+
+
+
+			if(payload_buffer_size == 0){
+				payload_buffer_size = 256;
+		     }
+
+			if(checkFourWayCRC(payload_buffer_size+7) == 1){
+				base_address =  (rxBuffer[2] << 8 | rxBuffer[3]) << 2;
+				address = 0x08000000 + base_address;
+
+				uint8_t read_data[payload_buffer_size];
+				for(int i = 0 ; i < payload_buffer_size; i++){
+				read_data[i] = rxBuffer[i+5];
+				}
+
+				save_flash_nolib((uint8_t*)read_data, payload_buffer_size,address);
+
+				payLoadBuffer[0] = 0x2e;
+				payLoadBuffer[1] = 0x3B;
+				payLoadBuffer[2] = rxBuffer[2];
+				payLoadBuffer[3] = rxBuffer[3];
+				payLoadBuffer[4] = 0x01;
+				payLoadBuffer[5] = 0x00;
+				payLoadBuffer[6] = 0x00;
+				uint16_t fullCrc  = makeFourWayCRC((uint8_t*)payLoadBuffer,7);
+				payLoadBuffer[7] = (fullCrc >> 8) & 0xff;
+				payLoadBuffer[8] =  fullCrc & 0xff;
+				setTransmit();
+	            sendString(payLoadBuffer, 9);
+
+				setReceive();
+			}else{
+				return;
+			}
+		break;
+
+	}
+}
+
+
+#endif
 
 
 void decodeInput(){
@@ -245,7 +410,12 @@ void decodeInput(){
 					return;
 				}
 		}
-
+#ifdef ALLOW_FOUR_WAY_COMMANDS
+	if(cmd == 0x2F){
+		parseFourWayMessage();
+		return;
+	}
+#endif
 	if(cmd == CMD_RUN){         // starts the main app
 		if((rxBuffer[1] == 0) && (rxBuffer[2] == 0) && (rxBuffer[3] == 0)){
 		invalid_command = 101;
@@ -256,9 +426,17 @@ void decodeInput(){
 	if(cmd == CMD_PROG_FLASH){
 		len = 2;
 		if(checkCrc(rxBuffer,len)){
+			if(address >= 0x08001000){ // don't allow writing to bootloader area
 			save_flash_nolib((uint8_t*)payLoadBuffer, payload_buffer_size,address);
 			  send_ACK();
 			  return;
+			}else{
+				send_BAD_CMD_ACK();
+				return;
+			}
+		}else{
+			send_BAD_CRC_ACK();
+			return;
 		}
 	}
 
@@ -279,33 +457,22 @@ void decodeInput(){
  * address can be 128kb or larger in order to program higher value the memory address is 4 times the incoming address number
  *
  */
-
+#ifdef SIXTY_FOUR_KB_MEMORY
+		base_address =  (rxBuffer[2] << 8 | rxBuffer[3]);
+#else
 		base_address =  (rxBuffer[2] << 8 | rxBuffer[3]) << 2;
+#endif
+
 
 		if(checkCrc((uint8_t*)rxBuffer,len)){
 			          // will send Ack 0x30 and read input after transfer out callback
 			invalid_command = 0;
-			if(base_address >= 0x1000){   // make sure its higher than bootloader always
-				if((base_address == 0x1000) || (base_address == 0x1f800)){     // 126 kb mark
-				address = 0x08000000 + base_address;
-				send_ACK();
-
-				return;
-				}else{
-
-
-				if(address + address_expected_increment >= 0x08000000 + base_address){  // ensure it moves in 256 kb increments or less so no steps are missed
 				address = 0x08000000 + base_address;
 				send_ACK();
 				return;
-				}
-				}
-			}
-
-
-		}
-		else{
-			//crcerror++;
+			}else{
+			send_BAD_CRC_ACK();
+			return;
 		}
 
 	}
@@ -318,11 +485,13 @@ void decodeInput(){
 	         payload_buffer_size = rxBuffer[3];
             	}
 	         incoming_payload_no_command = 1;
-	         address_expected_increment = 256;
            setReceive();
       //     memset(rxBuffer, 0, sizeof(rxBuffer));
            return;
-}
+            }else{
+            	send_BAD_CRC_ACK();
+            	return;
+            }
 		}
 	if(rxBuffer[0] == CMD_KEEP_ALIVE){
 	len = 2;
@@ -351,15 +520,10 @@ eeprom_req = 1;
 	if(cmd == CMD_READ_FLASH_SIL){     // for sending contents of flash memory at the memory location set in bootloader.c need to still set memory with data from set mem command
 		len = 2;
 		count++;
-//		if(address == 0x08001a00){
-//			// send fake eeprom
-//			//
-//		}
 		uint16_t out_buffer_size = rxBuffer[1];//
 		if(out_buffer_size == 0){
 			out_buffer_size = 256;
 		}
-		address_expected_increment = 128;
 		if(checkCrc((uint8_t*)rxBuffer,len)){
 			setTransmit();
 			uint8_t read_data[out_buffer_size + 3];        // make buffer 3 larger to fit CRC and ACK
@@ -375,6 +539,9 @@ eeprom_req = 1;
 
 			setReceive();
 
+			return;
+		}else{
+			send_BAD_CRC_ACK();
 			return;
 		}
 	}
@@ -417,7 +584,7 @@ delayMicroseconds(HALFBITTIME);//wait to get the center of bit time
 int bits_to_read = 0;
 while (bits_to_read < 8) {
 	delayMicroseconds(BITTIME);
-	rxbyte = rxbyte | ((( input_port->IDR & input_pin)) >> shift_amount) << bits_to_read;
+	rxbyte = rxbyte | ((( input_port->IDR & input_pin)) >> PIN_NUMBER) << bits_to_read;
 	//bits[bits_to_read] = ( GPIOA->IDR & LL_GPIO_PIN_2) >>2;        // shift by two for address offset
   bits_to_read++;
 }
@@ -497,7 +664,7 @@ void recieveBuffer(){
 		break;
 	    }else{
 		rxBuffer[i] = rxbyte;
-		if(i == 257){
+		if(i == 300){
 			invalid_command+=20;       // needs one hundred to trigger a jump but will be reset on next set address commmand
 
 		}
@@ -505,6 +672,59 @@ void recieveBuffer(){
 	}
 	}
 		decodeInput();
+}
+
+void update_EEPROM(){
+read_flash_bin(rxBuffer , EEPROM_START_ADD , 48);
+if(BOOTLOADER_VERSION != rxBuffer[2]){
+	if (rxBuffer[2] == 0xFF || rxBuffer[2] == 0x00){
+		return;
+	}
+	rxBuffer[2] = BOOTLOADER_VERSION;
+save_flash_nolib(rxBuffer, 48, EEPROM_START_ADD);
+}
+}
+
+void checkForSignal(){
+	  uint16_t low_pin_count = 0;
+	  LL_GPIO_SetPinPull(input_port, input_pin, LL_GPIO_PULL_DOWN);
+	  delayMicroseconds(500);
+
+	  for(int i = 0 ; i < 500; i ++){
+		 if( !(input_port->IDR & input_pin)){
+			 low_pin_count++;
+		 }else{
+		//	 high_pin_count++;
+		 }
+
+		  delayMicroseconds(10);
+	  }
+			 if(low_pin_count == 0){
+				 return;           // all high while pin is pulled low, bootloader signal
+			 }
+
+		 low_pin_count = 0;
+
+		 LL_GPIO_SetPinPull(input_port, input_pin, LL_GPIO_PULL_NO);
+		 delayMicroseconds(500);
+
+		 for(int i = 0 ; i < 500; i ++){
+		 if( !(input_port->IDR & input_pin)){
+			 low_pin_count++;
+		 }
+
+		  delayMicroseconds(10);
+	  }
+		 if(low_pin_count == 0){
+			 return;            // when floated all
+		 }
+
+		 if(low_pin_count > 0){
+			 jump();
+		 }
+
+
+
 }
 
 int main(void)
@@ -525,20 +745,17 @@ int main(void)
   LL_GPIO_SetPinPull(input_port, input_pin, LL_GPIO_PULL_DOWN);
 
 
-  for(int i = 0 ; i < 1000; i ++){
-	 if( !(input_port->IDR & input_pin)){
-		 jump();
-	 }
-	  delayMicroseconds(10);
-  }
+  checkForSignal();
+   LL_GPIO_SetPinPull(input_port, input_pin, LL_GPIO_PULL_UP);
 
-  LL_GPIO_SetPinPull(input_port, input_pin, LL_GPIO_PULL_UP);
+   deviceInfo[3] = pin_code;
+   update_EEPROM();
+
 
 #ifdef USE_ADC_INPUT  // go right to application
 jump();
 
 #endif
-
 
   while (1)
   {
@@ -644,27 +861,15 @@ static void MX_GPIO_INPUT_INIT(void)
 }
 void Error_Handler(void)
 {
-  /* USER CODE BEGIN Error_Handler_Debug */
-  /* User can add his own implementation to report the HAL error return state */
 
-  /* USER CODE END Error_Handler_Debug */
 }
 
 #ifdef  USE_FULL_ASSERT
-/**
-  * @brief  Reports the name of the source file and the source line number
-  *         where the assert_param error has occurred.
-  * @param  file: pointer to the source file name
-  * @param  line: assert_param error line source number
-  * @retval None
-  */
+
 void assert_failed(uint8_t *file, uint32_t line)
 { 
-  /* USER CODE BEGIN 6 */
-  /* User can add his own implementation to report the file name and line number,
-     tex: printf("Wrong parameters value: file %s on line %d\r\n", file, line) */
-  /* USER CODE END 6 */
+
 }
 #endif /* USE_FULL_ASSERT */
 
-/************************ (C) COPYRIGHT STMicroelectronics *****END OF FILE****/
+
