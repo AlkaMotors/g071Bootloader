@@ -388,7 +388,7 @@ void decodeInput(){
 	cmd = rxBuffer[0];
 
 	if(rxBuffer[16] == 0x7d){
-			if(rxBuffer[12] == 13 && rxBuffer[13] == 66){
+			if(rxBuffer[8] == 13 && rxBuffer[9] == 66){
 				sendDeviceInfo();
 				rxBuffer[20]= 0;
 				return;
