@@ -3,10 +3,12 @@
 #include <string.h>
 #include "bootloader.h"
 
+
 typedef void (*pFunction)(void);
 
+//#define SKIP_SIGNAL_CHECK // for slot car esc.
 #define USE_PB4
-#define BOOTLOADER_VERSION 5
+#define BOOTLOADER_VERSION 7
 //#define ALLOW_FOUR_WAY_COMMANDS
 #define SIXTY_FOUR_KB_MEMORY
 
@@ -367,6 +369,7 @@ void parseFourWayMessage(){
 
 
 void decodeInput(){
+
 	if(incoming_payload_no_command){
 		len = payload_buffer_size;
 	//	received_crc_low_byte = rxBuffer[len];          // one higher than len in buffer
@@ -457,6 +460,8 @@ void decodeInput(){
  * address can be 128kb or larger in order to program higher value the memory address is 4 times the incoming address number
  *
  */
+
+
 #ifdef SIXTY_FOUR_KB_MEMORY
 		base_address =  (rxBuffer[2] << 8 | rxBuffer[3]);
 #else
@@ -472,6 +477,7 @@ void decodeInput(){
 				return;
 			}else{
 			send_BAD_CRC_ACK();
+			invalid_command++;
 			return;
 		}
 
@@ -645,10 +651,10 @@ void sendString(uint8_t *data, int len){
 void recieveBuffer(){
 
 	//int i = 0;
-
+	count = 0;
 	messagereceived = 0;
 	memset(rxBuffer, 0, sizeof(rxBuffer));
-	TIM2->CNT = 0;
+	//TIM2->CNT = 0;
 	for(int i = 0; i < sizeof(rxBuffer); i++){
 	serialreadChar();
 	if(incoming_payload_no_command){
@@ -664,7 +670,7 @@ void recieveBuffer(){
 		break;
 	    }else{
 		rxBuffer[i] = rxbyte;
-		if(i == 300){
+		if(i == 257){
 			invalid_command+=20;       // needs one hundred to trigger a jump but will be reset on next set address commmand
 
 		}
@@ -741,7 +747,9 @@ int main(void)
   MX_GPIO_Init();
   MX_TIM2_Init();
   LL_TIM_EnableCounter(TIM2);
-
+#ifdef SKIP_SIGNAL_CHECK
+  jump();
+#endif
   LL_GPIO_SetPinPull(input_port, input_pin, LL_GPIO_PULL_DOWN);
 
 
@@ -871,5 +879,3 @@ void assert_failed(uint8_t *file, uint32_t line)
 
 }
 #endif /* USE_FULL_ASSERT */
-
-
