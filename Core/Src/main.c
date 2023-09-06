@@ -3,6 +3,9 @@
 #include <string.h>
 #include "bootloader.h"
 
+#ifdef USE_LED_STRIP
+#include "WS2812.h"
+#endif
 
 typedef void (*pFunction)(void);
 
@@ -98,7 +101,7 @@ pFunction JumpToApplication;
 
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
-static void MX_TIM2_Init(void);
+static void MX_TIM2_Init(uint16_t);
 static void MX_GPIO_INPUT_INIT(void);
 void processmessage(void);
 void serialwriteChar(char data);
@@ -745,7 +748,7 @@ int main(void)
   SystemClock_Config();
 
   MX_GPIO_Init();
-  MX_TIM2_Init();
+  MX_TIM2_Init(63); // timer set to microsecond resolution
   LL_TIM_EnableCounter(TIM2);
 #ifdef SKIP_SIGNAL_CHECK
   jump();
@@ -763,6 +766,15 @@ int main(void)
 #ifdef USE_ADC_INPUT  // go right to application
 jump();
 
+#endif
+
+#ifdef USE_LED_STRIP
+	MX_TIM2_Init(1); // speed up the timer to make the super short pulses
+	LL_TIM_EnableCounter(TIM2);
+	WS2812_Init();
+	send_LED_RGB(32, 32, 32 + 16); // set one colour to indicate that bootloader is active
+	MX_TIM2_Init(63); // restore the microsecond timer
+	LL_TIM_EnableCounter(TIM2);
 #endif
 
   while (1)
@@ -814,13 +826,13 @@ void SystemClock_Config(void)
   LL_SetSystemCoreClock(64000000);
 }
 
-static void MX_TIM2_Init(void)
+static void MX_TIM2_Init(uint16_t prescaler)
 {
   LL_TIM_InitTypeDef TIM_InitStruct = {0};
 
   /* Peripheral clock enable */
   LL_APB1_GRP1_EnableClock(LL_APB1_GRP1_PERIPH_TIM2);
-  TIM_InitStruct.Prescaler = 63;
+  TIM_InitStruct.Prescaler = prescaler;
   TIM_InitStruct.CounterMode = LL_TIM_COUNTERMODE_UP;
   TIM_InitStruct.Autoreload = 0xFFFFFFFF;
   TIM_InitStruct.ClockDivision = LL_TIM_CLOCKDIVISION_DIV1;
